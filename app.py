@@ -13,6 +13,14 @@ api_keys = [k.strip() for k in st.secrets["GEMINI_API_KEYS"].split(",") if k.str
 g = Github(st.secrets["GITHUB_PAT"])
 repo = g.get_user().get_repo(st.secrets["GITHUB_REPO_NAME"])
 
+# --- ÚJ: AI SZEMÉLYISÉGEK (SYSTEM PROMPTS) ---
+PERSONAS = {
+    "Általános Asszisztens": "Te egy segítőkész, udvarias és precíz mesterséges intelligencia asszisztens vagy. Válaszolj világosan, tagoltan és érthetően minden kérdésre.",
+    "Adatelemző és Python Guru": "Te egy szenior adatelemző és szoftverfejlesztő vagy. Kódjaid legyenek tömörek, a PEP 8 szabványnak megfelelőek. Fókuszálj az optimális adatkezelésre (Pandas, Numpy) és a vizualizációra (Seaborn, Tableau). Mindig magyarázd el a kódblokkok logikáját.",
+    "Pénzügyi Matematika Szakértő": "Te egy professzionális kvantitatív elemző vagy. Szakértője vagy az opcióárazásnak (Black-Scholes, Binomiális fák), a portfólió kockázatkezelésnek (CAPM, Beta) és a derivatíváknak. Használj szakszavakat, a képleteket pedig mindig LaTeX formátumban ($ és $$ jelekkel) írd fel.",
+    "Kíméletlen Kritikus (Lektor)": "Te egy rendkívül szigorú kód- és szövegkritikus vagy. Ne dicsérj feleslegesen. Azonnal mutass rá a logikai hibákra, a rossz szerkezetre és az optimalizálatlan megoldásokra. Javasolj radikálisan jobb alternatívákat."
+}
+
 # --- GITHUB ADATBÁZIS FÜGGVÉNYEK ---
 def get_github_file(filepath):
     try:
@@ -72,8 +80,8 @@ def auth_user():
             else:
                 st.sidebar.error("Hibás felhasználónév vagy jelszó!")
 
-# --- GEMINI AI MULTIMODÁLIS FÜGGVÉNY ---
-def get_gemini_response(gemini_parts):
+# --- GEMINI AI FÜGGVÉNY (SYSTEM PROMPTTAL BŐVÍTVE) ---
+def get_gemini_response(gemini_parts, system_instruction):
     history = []
     for msg in st.session_state.messages[:-1]:
         history.append({
@@ -84,8 +92,12 @@ def get_gemini_response(gemini_parts):
     for _ in range(len(api_keys)):
         current_key = api_keys[st.session_state.key_index]
         genai.configure(api_key=current_key)
-        # JAVÍTÁS: A legújabb és legstabilabb végpont használata
-        model = genai.GenerativeModel("gemini-1.5-flash-latest")
+        
+        # JAVÍTÁS: A kiválasztott személyiség átadása az API-nak
+        model = genai.GenerativeModel(
+            "gemini-1.5-flash-latest",
+            system_instruction=system_instruction
+        )
         
         try:
             chat = model.start_chat(history=history)
@@ -113,12 +125,21 @@ if not st.session_state.logged_in:
 else:
     st.sidebar.title(f"Üdv, {st.session_state.username}!")
     
+    # --- ÚJ: SZEMÉLYISÉG KIVÁLASZTÁSA AZ OLDALSÁVBAN ---
+    st.sidebar.write("---")
+    st.sidebar.subheader("🧠 AI Személyisége")
+    selected_persona_name = st.sidebar.selectbox(
+        "Kiként viselkedjen a modell?", 
+        list(PERSONAS.keys())
+    )
+    st.sidebar.info(PERSONAS[selected_persona_name]) # Rövid előnézet a szabályból
+    st.sidebar.write("---")
+    
     if st.sidebar.button("➕ Új csevegés indítása"):
         st.session_state.messages = []
         st.session_state.current_chat_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         st.rerun()
         
-    st.sidebar.write("---")
     st.sidebar.subheader("Mentett beszélgetéseid")
     
     user_chats = []
@@ -178,7 +199,6 @@ else:
             file_bytes = uploaded_file.read()
             display_prompt = f"📎 *[{uploaded_file.name}]* feltöltve.\n\n{prompt}"
             
-            # --- JAVÍTÁS: Szöveg és kód fájlok kezelése ---
             if uploaded_file.name.endswith(('.txt', '.py', '.csv', '.json', '.html', '.css')):
                 try:
                     text_content = file_bytes.decode('utf-8')
@@ -186,7 +206,6 @@ else:
                 except Exception:
                     gemini_parts = [prompt + "\n\n(A szöveges fájl kódolása nem olvasható.)"]
                     
-            # --- JAVÍTÁS: PDF-ek profi beolvasása ---
             elif uploaded_file.name.lower().endswith('.pdf'):
                 try:
                     pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
@@ -196,7 +215,6 @@ else:
                         if extracted:
                             pdf_text += extracted + "\n"
                     
-                    # Ha a PDF scannelt kép és nincs benne szöveg
                     if not pdf_text.strip():
                         gemini_parts = [prompt + f"\n\n(A feltöltött {uploaded_file.name} PDF fájlból nem lehetett szöveget kiolvasni, valószínűleg csak képeket tartalmaz.)"]
                     else:
@@ -204,7 +222,6 @@ else:
                 except Exception as e:
                     gemini_parts = [prompt + f"\n\n(Hiba a PDF olvasásakor: {e})"]
                     
-            # --- Képek esetében marad a nyers formátum ---
             else:
                 gemini_parts = [
                     prompt,
@@ -217,7 +234,8 @@ else:
 
         with st.chat_message("assistant"):
             with st.spinner("Gondolkodom..."):
-                response_text = get_gemini_response(gemini_parts)
+                # JAVÍTÁS: A kiválasztott szabály átadása a generátornak
+                response_text = get_gemini_response(gemini_parts, PERSONAS[selected_persona_name])
             st.markdown(response_text)
             
         st.session_state.messages.append({"role": "assistant", "content": response_text})
