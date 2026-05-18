@@ -104,7 +104,7 @@ def get_gemini_response(gemini_parts, system_instruction):
         genai.configure(api_key=current_key)
 
         model = genai.GenerativeModel(
-            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash",
             system_instruction=system_instruction
         )
 
