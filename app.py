@@ -5,6 +5,8 @@ from github import Github
 import json
 import hashlib
 from datetime import datetime
+import pypdf
+import io
 
 # --- BEÁLLÍTÁSOK ÉS TITKOK BETÖLTÉSE ---
 api_keys = [k.strip() for k in st.secrets["GEMINI_API_KEYS"].split(",") if k.strip()]
@@ -72,7 +74,6 @@ def auth_user():
 
 # --- GEMINI AI MULTIMODÁLIS FÜGGVÉNY ---
 def get_gemini_response(gemini_parts):
-    # Előzmények felépítése (csak a szöveges tartalmat visszük át a korábbi körökből)
     history = []
     for msg in st.session_state.messages[:-1]:
         history.append({
@@ -83,7 +84,8 @@ def get_gemini_response(gemini_parts):
     for _ in range(len(api_keys)):
         current_key = api_keys[st.session_state.key_index]
         genai.configure(api_key=current_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # JAVÍTÁS: A legújabb és legstabilabb végpont használata
+        model = genai.GenerativeModel("gemini-1.5-flash-latest")
         
         try:
             chat = model.start_chat(history=history)
@@ -109,7 +111,6 @@ if not st.session_state.logged_in:
     auth_user()
     st.info("Kérlek lépj be vagy regisztrálj a chateléshez.")
 else:
-    # --- OLDALSÁV (HISTORY KEZELÉS) ---
     st.sidebar.title(f"Üdv, {st.session_state.username}!")
     
     if st.sidebar.button("➕ Új csevegés indítása"):
@@ -120,7 +121,6 @@ else:
     st.sidebar.write("---")
     st.sidebar.subheader("Mentett beszélgetéseid")
     
-    # Repó fájljainak listázása a múlthoz
     user_chats = []
     try:
         contents = repo.get_contents("history")
@@ -148,8 +148,6 @@ else:
             if st.sidebar.button("🗑️ Törlés", use_container_width=True):
                 chosen = chat_options[selected_display]
                 repo.delete_file(chosen['obj'].path, f"Csevegés törlése: {chosen['filename']}", chosen['sha'])
-                
-                # Ha pont a megnyitottat törölte ki, ürítsük az ablakot
                 if chosen['filename'] == f"{st.session_state.username}_{st.session_state.current_chat_id}.json":
                     st.session_state.messages = []
                     st.session_state.current_chat_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -164,52 +162,63 @@ else:
         st.session_state.messages = []
         st.rerun()
 
-    # --- CHAT FELÜLET ---
     st.title("Felhős AI Asszisztens")
 
-    # Üzenetek kirajzolása
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Fájl feltöltő modul
     uploaded_file = st.file_uploader("Fájl csatolása (Kép, PDF, TXT, PY, CSV)", type=["png", "jpg", "jpeg", "pdf", "txt", "py", "csv"])
 
     if prompt := st.chat_input("Írj egy üzenetet..."):
         display_prompt = prompt
         gemini_parts = [prompt]
         
-        # Ha van feltöltött fájl, feldolgozzuk
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
             display_prompt = f"📎 *[{uploaded_file.name}]* feltöltve.\n\n{prompt}"
             
-            # Ha sima kód vagy szöveg, beolvassuk stringként (így stabilabb és nem hízik a Git adatbázis)
+            # --- JAVÍTÁS: Szöveg és kód fájlok kezelése ---
             if uploaded_file.name.endswith(('.txt', '.py', '.csv', '.json', '.html', '.css')):
                 try:
                     text_content = file_bytes.decode('utf-8')
                     gemini_parts = [prompt + f"\n\n--- CSATOLT FÁJL TARTALMA ({uploaded_file.name}) ---\n{text_content}"]
                 except Exception:
                     gemini_parts = [prompt + "\n\n(A szöveges fájl kódolása nem olvasható.)"]
+                    
+            # --- JAVÍTÁS: PDF-ek profi beolvasása ---
+            elif uploaded_file.name.lower().endswith('.pdf'):
+                try:
+                    pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                    pdf_text = ""
+                    for page in pdf_reader.pages:
+                        extracted = page.extract_text()
+                        if extracted:
+                            pdf_text += extracted + "\n"
+                    
+                    # Ha a PDF scannelt kép és nincs benne szöveg
+                    if not pdf_text.strip():
+                        gemini_parts = [prompt + f"\n\n(A feltöltött {uploaded_file.name} PDF fájlból nem lehetett szöveget kiolvasni, valószínűleg csak képeket tartalmaz.)"]
+                    else:
+                        gemini_parts = [prompt + f"\n\n--- CSATOLT PDF TARTALMA ({uploaded_file.name}) ---\n{pdf_text}"]
+                except Exception as e:
+                    gemini_parts = [prompt + f"\n\n(Hiba a PDF olvasásakor: {e})"]
+                    
+            # --- Képek esetében marad a nyers formátum ---
             else:
-                # Kép vagy PDF esetén nyers bájtokként küldjük az API-nak
                 gemini_parts = [
                     prompt,
                     {"mime_type": uploaded_file.type, "data": file_bytes}
                 ]
         
-        # Felhasználói üzenet hozzáadása és kirajzolása
         st.session_state.messages.append({"role": "user", "content": display_prompt})
         with st.chat_message("user"):
             st.markdown(display_prompt)
 
-        # AI válasz generálása
         with st.chat_message("assistant"):
             with st.spinner("Gondolkodom..."):
                 response_text = get_gemini_response(gemini_parts)
             st.markdown(response_text)
             
         st.session_state.messages.append({"role": "assistant", "content": response_text})
-        
-        # AUTOMATIKUS MENTÉS A GITHUBRA
         auto_save_chat()
