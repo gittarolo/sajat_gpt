@@ -2,3 +2,4 @@ streamlit
 google-generativeai
 PyGithub
 pypdf
+duckduckgo-search
