@@ -7,6 +7,7 @@ import hashlib
 from datetime import datetime
 import pypdf
 import io
+from web_search import get_web_context
 
 # --- BEÁLLÍTÁSOK ÉS TITKOK BETÖLTÉSE ---
 api_keys = [k.strip() for k in st.secrets["GEMINI_API_KEYS"].split(",") if k.strip()]
@@ -134,6 +135,9 @@ else:
     )
     st.sidebar.info(PERSONAS[selected_persona_name]) # Rövid előnézet a szabályból
     st.sidebar.write("---")
+    use_web_search = st.sidebar.checkbox("🌐 Élő Webes Keresés bekapcsolása", value=False)
+
+    st.sidebar.write("---")
     
     if st.sidebar.button("➕ Új csevegés indítása"):
         st.session_state.messages = []
@@ -193,18 +197,31 @@ else:
 
     if prompt := st.chat_input("Írj egy üzenetet..."):
         display_prompt = prompt
-        gemini_parts = [prompt]
         
+        # --- ÚJ: Ha be van kapcsolva a keresés ---
+        if use_web_search:
+            with st.spinner("Keresés a weben..."):
+                web_info = get_web_context(prompt)
+                # A képernyőn jelezzük a felhasználónak, hogy keresett
+                display_prompt = f"🔍 *Webes kereséssel:*\n\n{prompt}"
+                # Az AI-nak küldött rejtett promptba belefűzzük a keresési eredményeket
+                ai_prompt = f"{prompt}\n\n{web_info}"
+        else:
+            ai_prompt = prompt
+            
+        gemini_parts = [ai_prompt]
+        
+        # Fájlkezelés (marad ugyanaz, de ai_prompt-hoz fűzzük)
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
-            display_prompt = f"📎 *[{uploaded_file.name}]* feltöltve.\n\n{prompt}"
+            display_prompt = f"📎 *[{uploaded_file.name}]* feltöltve.\n\n{display_prompt}"
             
             if uploaded_file.name.endswith(('.txt', '.py', '.csv', '.json', '.html', '.css')):
                 try:
                     text_content = file_bytes.decode('utf-8')
-                    gemini_parts = [prompt + f"\n\n--- CSATOLT FÁJL TARTALMA ({uploaded_file.name}) ---\n{text_content}"]
+                    gemini_parts = [ai_prompt + f"\n\n--- CSATOLT FÁJL TARTALMA ({uploaded_file.name}) ---\n{text_content}"]
                 except Exception:
-                    gemini_parts = [prompt + "\n\n(A szöveges fájl kódolása nem olvasható.)"]
+                    gemini_parts = [ai_prompt + "\n\n(A szöveges fájl kódolása nem olvasható.)"]
                     
             elif uploaded_file.name.lower().endswith('.pdf'):
                 try:
@@ -216,17 +233,13 @@ else:
                             pdf_text += extracted + "\n"
                     
                     if not pdf_text.strip():
-                        gemini_parts = [prompt + f"\n\n(A feltöltött {uploaded_file.name} PDF fájlból nem lehetett szöveget kiolvasni, valószínűleg csak képeket tartalmaz.)"]
+                        gemini_parts = [ai_prompt + f"\n\n(A feltöltött PDF fájlból nem lehetett szöveget kiolvasni.)"]
                     else:
-                        gemini_parts = [prompt + f"\n\n--- CSATOLT PDF TARTALMA ({uploaded_file.name}) ---\n{pdf_text}"]
+                        gemini_parts = [ai_prompt + f"\n\n--- CSATOLT PDF TARTALMA ---\n{pdf_text}"]
                 except Exception as e:
-                    gemini_parts = [prompt + f"\n\n(Hiba a PDF olvasásakor: {e})"]
-                    
+                    gemini_parts = [ai_prompt + f"\n\n(Hiba a PDF olvasásakor: {e})"]
             else:
-                gemini_parts = [
-                    prompt,
-                    {"mime_type": uploaded_file.type, "data": file_bytes}
-                ]
+                gemini_parts = [ai_prompt, {"mime_type": uploaded_file.type, "data": file_bytes}]
         
         st.session_state.messages.append({"role": "user", "content": display_prompt})
         with st.chat_message("user"):
@@ -234,7 +247,6 @@ else:
 
         with st.chat_message("assistant"):
             with st.spinner("Gondolkodom..."):
-                # JAVÍTÁS: A kiválasztott szabály átadása a generátornak
                 response_text = get_gemini_response(gemini_parts, PERSONAS[selected_persona_name])
             st.markdown(response_text)
             
