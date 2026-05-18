@@ -3,3 +3,4 @@ google-generativeai
 PyGithub
 pypdf
 duckduckgo-search
+streamlit-mic-recorder
