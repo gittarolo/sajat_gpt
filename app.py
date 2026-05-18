@@ -9,6 +9,8 @@ import pypdf
 import io
 from web_search import get_web_context
 from voice import get_voice_input
+import re  # Szövegkereséshez (hogy megtaláljuk a kódot a válaszban)
+from code_runner import run_python_code  # Az új saját modulunk
 
 # --- BEÁLLÍTÁSOK ÉS TITKOK BETÖLTÉSE ---
 api_keys = [k.strip() for k in st.secrets["GEMINI_API_KEYS"].split(",") if k.strip()]
@@ -20,8 +22,9 @@ PERSONAS = {
     "Általános Asszisztens": "Te egy segítőkész, udvarias és precíz mesterséges intelligencia asszisztens vagy. Válaszolj világosan, tagoltan és érthetően minden kérdésre.",
     "Adatelemző és Python Guru": "Te egy szenior adatelemző és szoftverfejlesztő vagy. Kódjaid legyenek tömörek, a PEP 8 szabványnak megfelelőek. Fókuszálj az optimális adatkezelésre (Pandas, Numpy) és a vizualizációra (Seaborn, Tableau). Mindig magyarázd el a kódblokkok logikáját.",
     "Pénzügyi Matematika Szakértő": "Te egy professzionális kvantitatív elemző vagy. Szakértője vagy az opcióárazásnak (Black-Scholes, Binomiális fák), a portfólió kockázatkezelésnek (CAPM, Beta) és a derivatíváknak. Használj szakszavakat, a képleteket pedig mindig LaTeX formátumban ($ és $$ jelekkel) írd fel.",
-    "Kíméletlen Kritikus (Lektor)": "Te egy rendkívül szigorú kód- és szövegkritikus vagy. Ne dicsérj feleslegesen. Azonnal mutass rá a logikai hibákra, a rossz szerkezetre és az optimalizálatlan megoldásokra. Javasolj radikálisan jobb alternatívákat."
+    "Kíméletlen Kritikus (Lektor)": "Te egy rendkívül szigorú kód- és szövegkritikus vagy. Ne dicsérj feleslegen. Azonnal mutass rá a logikai hibákra, a rossz szerkezetre és az optimalizálatlan megoldásokra. Javasolj radikálisan jobb alternatívákat."
 }
+
 
 # --- GITHUB ADATBÁZIS FÜGGVÉNYEK ---
 def get_github_file(filepath):
@@ -31,6 +34,7 @@ def get_github_file(filepath):
     except Exception:
         return None, None
 
+
 def save_to_github(filepath, data, commit_message, sha=None):
     json_data = json.dumps(data, indent=4, ensure_ascii=False)
     if sha:
@@ -38,22 +42,25 @@ def save_to_github(filepath, data, commit_message, sha=None):
     else:
         repo.create_file(filepath, commit_message, json_data)
 
+
 def auto_save_chat():
     if st.session_state.logged_in and st.session_state.messages:
         filename = f"history/{st.session_state.username}_{st.session_state.current_chat_id}.json"
         _, sha = get_github_file(filename)
         save_to_github(filename, st.session_state.messages, "Automatikus csevegés mentés", sha)
 
+
 # --- AUTENTIKÁCIÓS FÜGGVÉNYEK ---
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
+
 
 def auth_user():
     st.sidebar.title("Belépés / Regisztráció")
     menu = st.sidebar.radio("Válassz opciót:", ["Belépés", "Regisztráció"])
     username = st.sidebar.text_input("Felhasználónév")
     password = st.sidebar.text_input("Jelszó", type="password")
-    
+
     if st.sidebar.button("Mehet"):
         if not username or not password:
             st.sidebar.error("Minden mezőt ki kell tölteni!")
@@ -62,7 +69,7 @@ def auth_user():
         users_data, sha = get_github_file("users.json")
         if users_data is None:
             users_data = {}
-            
+
         hashed_pw = hash_password(password)
 
         if menu == "Regisztráció":
@@ -72,7 +79,7 @@ def auth_user():
                 users_data[username] = {"password": hashed_pw}
                 save_to_github("users.json", users_data, f"Új regisztráció: {username}", sha)
                 st.sidebar.success("Sikeres regisztráció! Most már beléphetsz.")
-                
+
         elif menu == "Belépés":
             if username in users_data and users_data[username]["password"] == hashed_pw:
                 st.session_state.logged_in = True
@@ -82,25 +89,25 @@ def auth_user():
             else:
                 st.sidebar.error("Hibás felhasználónév vagy jelszó!")
 
+
 # --- GEMINI AI FÜGGVÉNY (SYSTEM PROMPTTAL BŐVÍTVE) ---
 def get_gemini_response(gemini_parts, system_instruction):
     history = []
     for msg in st.session_state.messages[:-1]:
         history.append({
-            "role": "user" if msg["role"] == "user" else "model", 
+            "role": "user" if msg["role"] == "user" else "model",
             "parts": [msg["content"]]
         })
-        
+
     for _ in range(len(api_keys)):
         current_key = api_keys[st.session_state.key_index]
         genai.configure(api_key=current_key)
-        
-        # JAVÍTÁS: A kiválasztott személyiség átadása az API-nak
+
         model = genai.GenerativeModel(
             "gemini-1.5-flash-latest",
             system_instruction=system_instruction
         )
-        
+
         try:
             chat = model.start_chat(history=history)
             response = chat.send_message(gemini_parts)
@@ -110,8 +117,9 @@ def get_gemini_response(gemini_parts, system_instruction):
             st.warning("Kvóta kimerült, váltás a következő kulcsra...")
         except Exception as e:
             return f"Hiba történt a generálás során: {e}"
-            
+
     return "Sajnos az összes megadott API kulcsod kvótája elfogyott mára."
+
 
 # --- FŐ ALKALMAZÁS LOGIKA ---
 if "logged_in" not in st.session_state:
@@ -126,27 +134,27 @@ if not st.session_state.logged_in:
     st.info("Kérlek lépj be vagy regisztrálj a chateléshez.")
 else:
     st.sidebar.title(f"Üdv, {st.session_state.username}!")
-    
+
     # --- ÚJ: SZEMÉLYISÉG KIVÁLASZTÁSA AZ OLDALSÁVBAN ---
     st.sidebar.write("---")
     st.sidebar.subheader("🧠 AI Személyisége")
     selected_persona_name = st.sidebar.selectbox(
-        "Kiként viselkedjen a modell?", 
+        "Kiként viselkedjen a modell?",
         list(PERSONAS.keys())
     )
-    st.sidebar.info(PERSONAS[selected_persona_name]) # Rövid előnézet a szabályból
+    st.sidebar.info(PERSONAS[selected_persona_name])  # Rövid előnézet a szabályból
     st.sidebar.write("---")
     use_web_search = st.sidebar.checkbox("🌐 Élő Webes Keresés bekapcsolása", value=False)
 
     st.sidebar.write("---")
-    
+
     if st.sidebar.button("➕ Új csevegés indítása"):
         st.session_state.messages = []
         st.session_state.current_chat_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         st.rerun()
-        
+
     st.sidebar.subheader("Mentett beszélgetéseid")
-    
+
     user_chats = []
     try:
         contents = repo.get_contents("history")
@@ -160,7 +168,7 @@ else:
     if user_chats:
         chat_options = {c["display"]: c for c in user_chats}
         selected_display = st.sidebar.selectbox("Válassz ki egy csevegést:", list(chat_options.keys()))
-        
+
         col1, col2 = st.sidebar.columns(2)
         with col1:
             if st.sidebar.button("📂 Betöltés", use_container_width=True):
@@ -182,6 +190,43 @@ else:
     else:
         st.sidebar.info("Még nincs mentett beszélgetésed.")
 
+    # =========================================================================
+    # --- IDE KERÜLT BE AZ 5. MODUL: KÓD FUTTATÓ (CODE SANDBOX) INTERFÉSZ ---
+    # =========================================================================
+    st.sidebar.write("---")
+    st.sidebar.subheader("💻 Kód Futtató")
+
+    # Kikeressük az AI utolsó válaszából a legfrissebb Python kódblokkot
+    last_code = ""
+    if "messages" in st.session_state:
+        for msg in reversed(st.session_state.messages):
+            if msg["role"] == "assistant":
+                match = re.search(r'```python\n(.*?)\n```', msg["content"], re.DOTALL | re.IGNORECASE)
+                if match:
+                    last_code = match.group(1)
+                    break
+
+    # Szerkeszthető szövegdoboz a kódnak
+    code_to_run = st.sidebar.text_area("Szerkesztés és futtatás:", value=last_code, height=200)
+
+    if st.sidebar.button("▶️ Kód Futtatása", type="primary"):
+        if code_to_run.strip():
+            with st.spinner("Fut a kód..."):
+                success, result = run_python_code(code_to_run)
+
+            if success:
+                st.sidebar.success("Sikeres lefutás! Kimenet:")
+                if result.strip():
+                    st.sidebar.code(result)
+                else:
+                    st.sidebar.info("(A kód lefutott, de nem generált szöveges kimenetet)")
+            else:
+                st.sidebar.error("Hiba történt a futtatás során:")
+                st.sidebar.code(result)
+        else:
+            st.sidebar.warning("Nincs mit futtatni.")
+    # =========================================================================
+
     st.sidebar.write("---")
     if st.sidebar.button("Kijelentkezés"):
         st.session_state.logged_in = False
@@ -194,21 +239,16 @@ else:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    uploaded_file = st.file_uploader("Fájl csatolása (Kép, PDF, TXT, PY, CSV)", type=["png", "jpg", "jpeg", "pdf", "txt", "py", "csv"])
+    uploaded_file = st.file_uploader("Fájl csatolása (Kép, PDF, TXT, PY, CSV)",
+                                     type=["png", "jpg", "jpeg", "pdf", "txt", "py", "csv"])
 
-    # --- ÚJ: Hangvezérlő megjelenítése közvetlenül a chat sáv felett ---
     spoken_text = get_voice_input()
-    
-    # Eredeti szöveges beviteli mező
     prompt = st.chat_input("Írj egy üzenetet...")
-    
-    # --- ÚJ: Döntés: gépelt szöveg VAGY diktált szöveg ---
     actual_prompt = prompt or spoken_text
 
     if actual_prompt:
         display_prompt = actual_prompt
-        
-        # Ha be van kapcsolva a keresés
+
         if use_web_search:
             with st.spinner("Keresés a weben..."):
                 web_info = get_web_context(actual_prompt)
@@ -216,21 +256,20 @@ else:
                 ai_prompt = f"{actual_prompt}\n\n{web_info}"
         else:
             ai_prompt = actual_prompt
-            
+
         gemini_parts = [ai_prompt]
-        
-        # Fájlkezelés
+
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
             display_prompt = f"📎 *[{uploaded_file.name}]* feltöltve.\n\n{display_prompt}"
-            
+
             if uploaded_file.name.endswith(('.txt', '.py', '.csv', '.json', '.html', '.css')):
                 try:
                     text_content = file_bytes.decode('utf-8')
                     gemini_parts = [ai_prompt + f"\n\n--- CSATOLT FÁJL TARTALMA ({uploaded_file.name}) ---\n{text_content}"]
                 except Exception:
                     gemini_parts = [ai_prompt + "\n\n(A szöveges fájl kódolása nem olvasható.)"]
-                    
+
             elif uploaded_file.name.lower().endswith('.pdf'):
                 try:
                     pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
@@ -239,7 +278,7 @@ else:
                         extracted = page.extract_text()
                         if extracted:
                             pdf_text += extracted + "\n"
-                    
+
                     if not pdf_text.strip():
                         gemini_parts = [ai_prompt + f"\n\n(A feltöltött PDF fájlból nem lehetett szöveget kiolvasni.)"]
                     else:
@@ -248,7 +287,7 @@ else:
                     gemini_parts = [ai_prompt + f"\n\n(Hiba a PDF olvasásakor: {e})"]
             else:
                 gemini_parts = [ai_prompt, {"mime_type": uploaded_file.type, "data": file_bytes}]
-        
+
         st.session_state.messages.append({"role": "user", "content": display_prompt})
         with st.chat_message("user"):
             st.markdown(display_prompt)
@@ -257,6 +296,6 @@ else:
             with st.spinner("Gondolkodom..."):
                 response_text = get_gemini_response(gemini_parts, PERSONAS[selected_persona_name])
             st.markdown(response_text)
-            
+
         st.session_state.messages.append({"role": "assistant", "content": response_text})
         auto_save_chat()
