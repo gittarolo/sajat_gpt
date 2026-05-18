@@ -8,6 +8,7 @@ from datetime import datetime
 import pypdf
 import io
 from web_search import get_web_context
+from voice import get_voice_input
 
 # --- BEÁLLÍTÁSOK ÉS TITKOK BETÖLTÉSE ---
 api_keys = [k.strip() for k in st.secrets["GEMINI_API_KEYS"].split(",") if k.strip()]
@@ -195,23 +196,30 @@ else:
 
     uploaded_file = st.file_uploader("Fájl csatolása (Kép, PDF, TXT, PY, CSV)", type=["png", "jpg", "jpeg", "pdf", "txt", "py", "csv"])
 
-    if prompt := st.chat_input("Írj egy üzenetet..."):
-        display_prompt = prompt
+    # --- ÚJ: Hangvezérlő megjelenítése közvetlenül a chat sáv felett ---
+    spoken_text = get_voice_input()
+    
+    # Eredeti szöveges beviteli mező
+    prompt = st.chat_input("Írj egy üzenetet...")
+    
+    # --- ÚJ: Döntés: gépelt szöveg VAGY diktált szöveg ---
+    actual_prompt = prompt or spoken_text
+
+    if actual_prompt:
+        display_prompt = actual_prompt
         
-        # --- ÚJ: Ha be van kapcsolva a keresés ---
+        # Ha be van kapcsolva a keresés
         if use_web_search:
             with st.spinner("Keresés a weben..."):
-                web_info = get_web_context(prompt)
-                # A képernyőn jelezzük a felhasználónak, hogy keresett
-                display_prompt = f"🔍 *Webes kereséssel:*\n\n{prompt}"
-                # Az AI-nak küldött rejtett promptba belefűzzük a keresési eredményeket
-                ai_prompt = f"{prompt}\n\n{web_info}"
+                web_info = get_web_context(actual_prompt)
+                display_prompt = f"🔍 *Webes kereséssel:*\n\n{actual_prompt}"
+                ai_prompt = f"{actual_prompt}\n\n{web_info}"
         else:
-            ai_prompt = prompt
+            ai_prompt = actual_prompt
             
         gemini_parts = [ai_prompt]
         
-        # Fájlkezelés (marad ugyanaz, de ai_prompt-hoz fűzzük)
+        # Fájlkezelés
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
             display_prompt = f"📎 *[{uploaded_file.name}]* feltöltve.\n\n{display_prompt}"
